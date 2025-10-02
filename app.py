@@ -19,17 +19,16 @@ def _init_state():
     ss.setdefault("picker_idx_in_group", 0)
     ss.setdefault("df_norm", None)
     ss.setdefault("groups", {})
-    ss.setdefault("file_uploader_key", 0)  # 업로드 리셋용
+    ss.setdefault("file_uploader_key", 0)  # 업로더 리셋용
     ss.setdefault("skip_done", True)
 _init_state()
 
 # ===================== Helpers =====================
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """간단한 열 위치 기준 정규화"""
+    """업로드 엑셀의 0~7열을 표준 컬럼으로 단순 매핑."""
     out = pd.DataFrame(index=df.index)
     def col(i, fallback=""):
         return df.iloc[:, i].astype(str) if df.shape[1] > i else fallback
-
     out["slot"]       = col(0)
     out["green_code"] = col(1)
     out["sku"]        = col(2)
@@ -63,7 +62,6 @@ def move_index(step: int):
     i, n = ss.picker_idx_in_group, len(g)
     j = max(0, min(i + step, n-1))
     if ss.skip_done:
-        # 미완료 항목으로 이동
         direction = 1 if step >= 0 else -1
         k = i
         visited = set()
@@ -71,47 +69,84 @@ def move_index(step: int):
             visited.add(k)
             k = max(0, min(k + direction, n-1))
             if not ss.df_norm.loc[g[k], "done"]:
-                j = k
-                break
+                j = k; break
     ss.picker_idx_in_group = j
 
-# ===================== CSS =====================
+# ===================== CSS (라이트/다크 모두 가독성 확보) =====================
 st.markdown("""
 <style>
-.now-time { font-size: 1.35rem; font-weight: 800; color:#0f172a; }
-
-.segment { display:inline-flex; gap:12px; }
-.segment .seg {
-  width:60px; height:60px; border-radius:16px; border:2px solid #d1d5db;
-  background:#f8fafc; display:flex; align-items:center; justify-content:center;
-  font-size:20px; font-weight:800; color:#1f2937;
+/* 공통 팔레트 변수 */
+:root{
+  --fg: #0f172a;        /* 기본 텍스트(짙은 남색) */
+  --fg-strong: #0b1220; /* 더 짙은 텍스트 */
+  --muted: #475569;     /* 보조 텍스트 */
+  --chip: #16a34a;      /* 그린 태그 */
+  --slot-bg:#111827; --slot-fg:#f9fafb;
+  --danger:#dc2626;     /* 수량(빨강) */
+  --ok:#facc15; --ok-border:#eab308; --ok-fg:#111827;
+  --primary:#2563eb; --primary-fg:#ffffff;
+  --dark:#111827; --dark-fg:#f9fafb;
+  --clear:#fca5a5; --clear-border:#ef4444; --clear-fg:#7f1d1d;
+  --badge-bg:#fde8d9; --badge-bd:#fca5a5; --badge-fg:#111827;
+  --card-bd:#e5e7eb;
 }
-.segment .seg.active { background:#2563eb; color:#fff; border-color:#1d4ed8; }
+@media (prefers-color-scheme: dark){
+  :root{
+    --fg:#f3f4f6;
+    --fg-strong:#ffffff;
+    --muted:#cbd5e1;
+    --slot-bg:#e5e7eb; --slot-fg:#111827;
+    --badge-bg:#f3f4f6; --badge-bd:#cbd5e1; --badge-fg:#111827;
+    /* 버튼 색상은 동일 유지: 대비 확실 */
+  }
+}
 
-.card { position: relative; background:#fff; border:2px solid #e5e7eb; border-radius:18px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,.08); }
-.card.done { background:#f3f4f6; color:#9ca3af; border-color:#e5e7eb; }
-.ribbon { position:absolute; top:10px; right:-25px; transform:rotate(45deg); background:#9ca3af; color:#fff; padding:4px 40px; font-size:14px; font-weight:800; }
+/* 텍스트 */
+.now-time{font-size:1.35rem;font-weight:800;color:var(--fg-strong);}
 
-.slot { background:#111827; color:#f9fafb; border-radius:10px; padding:8px 14px; font-size:32px; font-weight:900; text-align:center; }
-.green { position:absolute; right:16px; top:52px; font-weight:900; color:#16a34a; font-size:42px; }
-.sku { font-size:92px; line-height:1.0; font-weight:900; color:#111827; letter-spacing:4px; margin:16px 0 6px 0; }
-.meta { display:flex; gap:24px; align-items:center; }
-.size { font-size:38px; font-weight:900; color:#111827; }
-.qty { font-size:38px; font-weight:900; color:#dc2626; }
-.badge { display:inline-block; background:#fde8d9; border:1px solid #fca5a5; border-radius:14px; padding:10px 14px; font-size:26px; font-weight:800; color:#111827; margin-top:8px; }
-.title { margin-top:10px; font-size:26px; line-height:1.25; font-weight:800; color:#0f172a; }
+/* 피커 세그먼트 */
+#picker-bar .stButton>button{
+  width:64px;height:64px;border-radius:16px;border:2px solid #d1d5db;
+  background:#f8fafc;color:#1f2937;font-weight:900;font-size:20px;
+}
+#picker-bar .stButton>button.active{
+  background:var(--primary);color:var(--primary-fg);border-color:#1d4ed8;
+}
 
-.stButton > button { width:100%; height:58px; border-radius:18px; font-size:22px; font-weight:900; border:1px solid #e5e7eb; }
-#ok-wrap button      { background:#facc15; color:#111827; border-color:#eab308; height:68px; }
-#prev-wrap button    { background:#111827; color:#f9fafb; }
-#next-wrap button    { background:#2563eb; color:#ffffff; }
-#fic-wrap button, #lic-wrap button { background:#111827; color:#f9fafb; }
-#clear-wrap button   { background:#fca5a5; color:#7f1d1d; border:2px solid #ef4444; height:68px; font-size:24px; }
+/* 카드 */
+.card{position:relative;background:transparent;border:2px solid var(--card-bd);
+  border-radius:18px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.08);}
+.card.done{background:rgba(148,163,184,.18);color:#9ca3af;border-color:var(--card-bd);}
+.ribbon{position:absolute;top:10px;right:-25px;transform:rotate(45deg);
+  background:#9ca3af;color:#fff;padding:4px 40px;font-size:14px;font-weight:800;}
 
-.center-row { display:flex; justify-content:center; }
-.center-col { width:72%; }
-.row-gap { margin-top:12px; }
-.subtle { color:#475569; font-size:0.92rem; }
+.slot{background:var(--slot-bg);color:var(--slot-fg);border-radius:10px;padding:8px 14px;
+  font-size:32px;font-weight:900;text-align:center;}
+.green{position:absolute;right:16px;top:52px;font-weight:900;color:var(--chip);font-size:42px;}
+.sku{font-size:92px;line-height:1.0;font-weight:900;color:var(--fg-strong);letter-spacing:4px;margin:16px 0 6px 0;}
+.meta{display:flex;gap:24px;align-items:center;}
+.size{font-size:38px;font-weight:900;color:var(--fg-strong);}
+.qty{font-size:38px;font-weight:900;color:var(--danger);}
+.badge{display:inline-block;background:var(--badge-bg);border:1px solid var(--badge-bd);border-radius:14px;
+  padding:10px 14px;font-size:26px;font-weight:900;color:var(--badge-fg);margin-top:8px;}
+.title{margin-top:10px;font-size:28px;line-height:1.25;font-weight:900;color:var(--fg-strong);
+  word-break:break-word;overflow-wrap:anywhere;}
+
+/* 액션 버튼(컨테이너 id로 스타일링: 사파리 호환) */
+.stButton>button{width:100%;height:58px;border-radius:18px;font-size:22px;font-weight:900;border:1px solid var(--card-bd);}
+#ok-wrap   .stButton>button{background:var(--ok);color:var(--ok-fg);border-color:var(--ok-border);height:68px;}
+#prev-wrap .stButton>button{background:var(--dark);color:var(--dark-fg);}
+#next-wrap .stButton>button{background:var(--primary);color:var(--primary-fg);}
+#fic-wrap  .stButton>button,#lic-wrap .stButton>button{background:var(--dark);color:var(--dark-fg);}
+#clear-wrap.stButton>button, #clear-wrap .stButton>button{background:var(--clear);color:var(--clear-fg);
+  border:2px solid var(--clear-border);height:68px;font-size:24px;}
+
+/* 모바일 터치 영역 개선 */
+button{ -webkit-tap-highlight-color: rgba(0,0,0,0); }
+.center-row{display:flex;justify-content:center;}
+.center-col{width:72%;}
+.row-gap{margin-top:12px;}
+.subtle{color:var(--muted);font-size:0.92rem;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -153,7 +188,8 @@ with right:
         st.session_state.picker_idx_in_group = 0
         st.rerun()
 
-# ===================== Picker Segments =====================
+# ===================== Picker Segments (숫자 라벨 버튼) =====================
+st.markdown("<div id='picker-bar'>", unsafe_allow_html=True)
 def render_segments():
     count = st.session_state.picker_count
     rows = math.ceil(count/3)
@@ -162,15 +198,39 @@ def render_segments():
         cols = st.columns(min(3, count-(idx-1)))
         for c in cols:
             with c:
-                active = (idx == st.session_state.active_picker)
-                st.markdown(f"<div class='segment'><div class='seg {'active' if active else ''}'>{idx}</div></div>", unsafe_allow_html=True)
-                if st.button(" ", key=f"seg_{idx}"):
+                # 버튼 자체를 스타일링: active일 땐 CSS 클래스를 못 주므로, 동일 효과를 위해 두 개 렌더 → active일 때 위/아래 여백으로 구분
+                is_active = (idx == st.session_state.active_picker)
+                btn = st.button(f"{idx}", key=f"seg_{idx}")
+                # 활성 시 추가 스타일 주기 위해 class를 직접 못 붙여서, 동일 컨테이너에서 한 번 더 버튼을 그리지 않고 색만 바꾸기 어려움.
+                # 대신 같은 모양, 색상은 CSS에서 픽커바 첫 렌더 후 아래처럼 바꿔줌.
+                if btn:
                     st.session_state.active_picker = idx
                     st.session_state.picker_idx_in_group = 0
                     st.rerun()
+                if is_active:
+                    # 활성 버튼에 active 클래스 부여(사파리 호환: 간단한 inline script 없이 CSS로 처리 불가하므로
+                    # 버튼 다음에 강조용 마크업 추가)
+                    st.markdown(
+                        "<style>#picker-bar button[kind='secondary'][data-testid^='baseButton-secondary']{}</style>",
+                        unsafe_allow_html=True
+                    )
             idx += 1
             if idx > count: break
 render_segments()
+st.markdown("</div>", unsafe_allow_html=True)
+
+# 버튼들이 CSS의 active 스타일을 받도록, 현재 활성 버튼에만 클래스를 강제로 입힘
+# (Streamlit이 class 직접 주는 API가 없어, JS 없이 구현 가능한 안전한 방법: nth-of-type 계산)
+# 간단화를 위해 재정의: picker-bar 아래 N번째 버튼을 찾아 active 스타일을 적용
+st.markdown(f"""
+<style>
+#picker-bar .stButton:nth-of-type({st.session_state.active_picker}) > button {{
+  background: var(--primary) !important;
+  color: var(--primary-fg) !important;
+  border-color: #1d4ed8 !important;
+}}
+</style>
+""", unsafe_allow_html=True)
 
 # ===================== Progress =====================
 if st.session_state.df_norm is not None:
@@ -183,7 +243,6 @@ else:
 
 # ===================== Main Card =====================
 row = current_series()
-
 if row is None:
     st.warning("표시할 데이터가 없습니다.")
 else:
@@ -192,16 +251,20 @@ else:
     st.markdown(f"<div class='{cls}'>", unsafe_allow_html=True)
     if done: st.markdown("<div class='ribbon'>DONE</div>", unsafe_allow_html=True)
 
-    st.markdown(f"<div class='slot'>{row['slot']}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='slot'>{row['slot'] or '?'}</div>", unsafe_allow_html=True)
     if str(row['green_code']).strip():
         st.markdown(f"<div class='green'>{row['green_code']}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='sku'>{row['sku']}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='meta'><div class='size'>{row['size'] or '?'}</div><div class='qty'>{int(row['qty']) if str(row['qty']).isdigit() else '?'}</div></div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='badge'>{row['barcode5']},{row['color']}</div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='title'>{row['style_name']}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='sku'>{row['sku'] or '?'}</div>", unsafe_allow_html=True)
+    qty_text = int(row['qty']) if str(row['qty']).isdigit() else "?"
+    st.markdown(f"<div class='meta'><div class='size'>{row['size'] or '?'}</div><div class='qty'>{qty_text}</div></div>", unsafe_allow_html=True)
+    badge_text = ",".join([x for x in [str(row['barcode5']).strip(), str(row['color']).strip()] if x])
+    st.markdown(f"<div class='badge'>{badge_text or '?'}</div>", unsafe_allow_html=True)
+    # 제품명이 안보였던 문제: 강제 줄바꿈 + 고대비 색 적용
+    title_text = (row['style_name'] or "?")
+    st.markdown(f"<div class='title'>{title_text}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ===================== Buttons =====================
+# ===================== Action Buttons =====================
 st.markdown("<div class='row-gap center-row'><div class='center-col' id='ok-wrap'>", unsafe_allow_html=True)
 ok = st.button("OK", key="ok_btn")
 st.markdown("</div></div>", unsafe_allow_html=True)
