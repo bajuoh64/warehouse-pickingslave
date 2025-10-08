@@ -101,6 +101,8 @@ def parse_dataframe(df):
             'zone': get_zone(location),
         })
     return out
+
+
 def distribute(sorted_rows, n_pickers):
     import math
     n = max(1, min(6, int(n_pickers or 1)))
