@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
-import re
-import io
-import math
+# -------------------------------------------------------------
+# 피킹 최적화 웹 애플리케이션 (Streamlit · Python) — 최종본 v1.4
+# 변경사항:
+# - 모든 import 구문을 함수 안으로 이동시켜 Cold Start 속도 극대화
+# - NameError 해결 및 코드 안정성 강화
+# -------------------------------------------------------------
+
 import streamlit as st
 
-# -------------------------------------------------------------
-# 피킹 최적화 웹 애플리케이션 (Streamlit · Python) — 최종본 v1.3
-# 변경사항:
-# - UI 흐름 개선: '피커 번호 선택' UI를 설정 화면에서 진행 화면으로 이동
-# - 코드 가독성 및 안정성 개선
-# -------------------------------------------------------------
-
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="피킹 최적화 웹앱 v1.3", layout="centered")
+st.set_page_config(page_title="피킹 최적화 웹앱 v1.4", layout="centered")
 
-# --- 유틸리티 함수들 ---
+# --- 유틸리티 함수들 (모든 import는 함수 내부로 이동) ---
+
 def key_of(obj_keys, candidates):
     for raw in obj_keys:
         k = str(raw).lower().replace(' ', '')
@@ -23,6 +21,7 @@ def key_of(obj_keys, candidates):
     return None
 
 def split_barcode_color(value):
+    import re
     s = str(value or '').strip()
     if not s: return {'barcode5': '', 'color': ''}
     m = re.match(r'^(\d{5})[,\-\s]*(.+)$', s)
@@ -31,6 +30,7 @@ def split_barcode_color(value):
     return {'barcode5': '', 'color': s}
 
 def split_style(value):
+    import re
     s = str(value or '').strip()
     if not s: return {'styleCode': '', 'styleName': ''}
     m = re.match(r'^\[(\d+)[^\]]*\](.*)$', s)
@@ -38,6 +38,7 @@ def split_style(value):
     return {'styleCode': '', 'styleName': s}
 
 def get_zone(location):
+    import re
     s = str(location or '').upper().strip()
     if not s: return ''
     m = re.match(r'^[A-Z0-9]{3,4}', s)
@@ -50,29 +51,26 @@ MASTER_ORDER = [
     '2RK', '2RM', '2RN', '2RP', '2RQ', '2RR', '2RS', '2RT', '2RU', '2RV',
     '3LA', '3LB', '3LD', '3LE', '3LF', '3LH', '3LN', '3LQ', '3LS', '3LT', '3LU',
     '3FC', '3MH', 'W3F', 'W3G'
-] # 실제 '완벽한 동선' 순서대로 로케이션 '구역(zone)'을 정의합니다.
+]
 
 def sort_key(row):
     zone = row.get('zone', '')
-    # MASTER_ORDER에 있는 구역 순서 + 같은 구역 내에서는 로케이션 코드 전체로 정렬
     base = MASTER_ORDER.index(zone) if zone in MASTER_ORDER else 999
     loc = str(row.get('location', '')).upper()
     return f"{base:03d}-{loc}"
 
-def parse_dataframe(df): 
-    import pandas as pd
+def parse_dataframe(df):
+    out = []
     cols = list(df.columns)
     k_location = key_of(cols, {'location','로케이션','bin','shelf','loc','위치'})
     k_qty = key_of(cols, {'qty','수량','quantity', '주문수량'})
     k_size = key_of(cols, {'size','사이즈'})
     k_color = key_of(cols, {'색상명','colorname','color','색상'})
     k_style = key_of(cols, {'스타일명','stylename','product','제품명','name'})
-    k_barcode = key_of(cols, {'barcode','바코드','upc','ean'})
-
-    out = []
+    
     for i, r in df.iterrows():
         location = str(r.get(k_location, '')).strip()
-        if not location: continue # 로케이션 없으면 무시
+        if not location: continue
 
         out.append({
             'id': int(i),
@@ -86,12 +84,13 @@ def parse_dataframe(df):
     return out
 
 def distribute(sorted_rows, n_pickers):
+    import math
     n = max(1, min(6, int(n_pickers or 1)))
     per = math.ceil(len(sorted_rows) / n) if len(sorted_rows) else 0
     packs = [sorted_rows[i*per:(i+1)*per] for i in range(n)]
     return packs
 
-# --- 세션 상태 관리 (앱의 기억 저장소) ---
+# --- 세션 상태 관리 ---
 if 'started' not in st.session_state:
     st.session_state.started = False
 if 'raw_rows' not in st.session_state:
@@ -107,11 +106,12 @@ if 'progress' not in st.session_state:
 
 # --- 화면 1: 설정 및 업로드 ---
 def render_setup():
-    st.title('📦 피킹 최적화 웹앱 v1.3')
+    st.title('📦 피킹 최적화 웹앱 v1.4')
 
     uploaded_file = st.file_uploader('엑셀(xlsx) 또는 CSV 업로드', type=['xlsx','xls','csv'])
     if uploaded_file is not None:
         try:
+            import pandas as pd
             if uploaded_file.name.lower().endswith('.csv'):
                 df = pd.read_csv(uploaded_file, dtype=str, keep_default_na=False)
             else:
@@ -122,7 +122,7 @@ def render_setup():
             st.success(f"{len(st.session_state.raw_rows)}개 항목을 성공적으로 불러왔습니다.")
         except Exception as e:
             st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
-
+    # (이하 render_setup 함수의 나머지 부분은 이전과 동일합니다)
     st.divider()
     st.subheader('작업자 수를 선택하세요')
     cols = st.columns(6)
@@ -147,14 +147,15 @@ def render_setup():
             del st.session_state[key]
         st.rerun()
 
+
 # --- 화면 2: 피킹 진행 ---
 def render_running():
+    # (이 부분은 이전과 동일하여 생략, 그대로 사용하시면 됩니다)
     pno = st.session_state.picker_no
     my_list = st.session_state.packs[pno - 1] if len(st.session_state.packs) >= pno else []
     prog = st.session_state.progress.get(pno, {'idx': 0, 'done_ids': set()})
     idx = prog.get('idx', 0)
     
-    # 현재 아이템, 다음 아이템 결정
     current = my_list[idx] if idx < len(my_list) else None
     next_item = my_list[idx + 1] if idx + 1 < len(my_list) else None
 
@@ -165,7 +166,6 @@ def render_running():
     st.title(f"피커 #{pno}")
     st.progress(pct / 100, text=f"{done_count} / {total} ({pct}%)")
 
-    # [수정됨] 다른 피커 화면으로 전환하는 UI
     if st.session_state.pickers > 1:
         st.subheader("다른 작업자 화면 보기")
         cols = st.columns(st.session_state.pickers)
@@ -174,7 +174,6 @@ def render_running():
                 st.session_state.picker_no = i + 1
                 st.rerun()
         st.divider()
-
 
     if current:
         st.markdown(f"**다음 로케이션**: :green[{next_item['location'] if next_item else '없음'}]")
@@ -195,7 +194,6 @@ def render_running():
 
     st.divider()
 
-    # --- 버튼 로직 ---
     def jump_to(new_index):
         st.session_state.progress[pno]['idx'] = max(0, min(new_index, len(my_list) - 1))
 
@@ -229,6 +227,7 @@ def render_running():
         for key in st.session_state.keys():
             del st.session_state[key]
         st.rerun()
+
 
 # --- 화면 라우팅 ---
 if st.session_state.started:
