@@ -2,7 +2,6 @@
 import re
 import io
 import math
-import pandas as pd
 import streamlit as st
 
 # -------------------------------------------------------------
@@ -61,6 +60,7 @@ def sort_key(row):
     return f"{base:03d}-{loc}"
 
 def parse_dataframe(df: pd.DataFrame):
+    import pandas as pd
     cols = list(df.columns)
     k_location = key_of(cols, {'location','로케이션','bin','shelf','loc','위치'})
     k_qty = key_of(cols, {'qty','수량','quantity', '주문수량'})
