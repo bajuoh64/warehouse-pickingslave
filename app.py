@@ -184,21 +184,17 @@ def render_setup():
         st.rerun()
 
 
-# --- 화면 2: 피킹 진행 ---
+
 # --- 화면 2: 피킹 진행 ---
 def render_running():
-    # --- 버튼 UI 강제 수정을 위한 CSS ---
+    # --- [수정됨] 버튼 레이아웃 강제 CSS (더 강력한 버전으로 변경) ---
     st.markdown("""
     <style>
-        /* Streamlit이 생성하는 기본 column 레이아웃을 덮어씁니다 */
-        div[data-testid="column"] {
+        /* Streamlit의 column 내부 div에 직접 flex 속성을 적용하여 가로 정렬을 강제합니다. */
+        div.st-emotion-cache-1e5k5j9.e1f1d6gn3 {
             display: flex;
-            flex-direction: column;
-            width: 100% !important;
-        }
-        /* 버튼이 column의 전체 너비를 차지하도록 설정 */
-        div[data-testid="column"] .stButton {
-            width: 100%;
+            flex-direction: row;
+            gap: 8px; /* 버튼 사이 간격 */
         }
     </style>
     """, unsafe_allow_html=True)
@@ -228,17 +224,15 @@ def render_running():
         st.divider()
 
     if current:
+        # (피킹 정보 표시는 이전과 동일)
         st.markdown(f"**다음 로케이션**: :green[{next_item['location'] if next_item else '없음'}]")
         st.header(current['location'])
-        
         c1, c2 = st.columns(2)
         c1.metric("사이즈", current['size'] or '-')
         c2.metric("수량", current['qty'])
-
         with st.container(border=True):
             st.markdown(f"**컬러:** {current['color'] or '-'}")
             st.markdown(f"**바코드 5자리:** `{current['barcode5'] or '-'}`")
-        
         st.caption(f"스타일명: {current['styleName'] or '-'}" + (f" (코드: {current['styleCode']})" if current['styleCode'] else ""))
     else:
         st.success("🎉 이 피커의 모든 작업이 완료되었습니다!")
@@ -250,51 +244,59 @@ def render_running():
 
     is_done = current and current['id'] in prog.get('done_ids', set())
 
+    # --- [수정됨] 버튼 로직: 그리기와 동작 처리를 분리 ---
+    
+    # 1. OK / 완료 취소 버튼 그리기
     if is_done:
-        button_label = '완료 취소 ↩️'
-        button_type = 'secondary'
+        ok_clicked = st.button('완료 취소 ↩️', type='secondary', use_container_width=True)
     else:
-        button_label = 'OK! ✅'
-        button_type = 'primary'
+        ok_clicked = st.button('OK! ✅', type='primary', use_container_width=True, disabled=not current)
 
-    if st.button(button_label, type=button_type, use_container_width=True, disabled=not current):
+    # 2. 나머지 버튼들 그리기 (변수에 클릭 결과 저장)
+    c1, c2 = st.columns(2)
+    prev_clicked = c1.button('◀ Previous', use_container_width=True)
+    next_clicked = c2.button('Next ▶', use_container_width=True)
+    
+    c3, c4 = st.columns(2)
+    first_cat_clicked = c3.button('First in Category', use_container_width=True, disabled=not current)
+    last_cat_clicked = c4.button('Last in Category', use_container_width=True, disabled=not current)
+
+    # 3. 모든 버튼을 다 그린 후에, 클릭된 버튼에 대한 동작 처리
+    if ok_clicked and current:
         if is_done:
             prog['done_ids'].remove(current['id'])
         else:
             prog['done_ids'].add(current['id'])
             jump_to(idx + 1)
         st.rerun()
+    
+    if prev_clicked:
+        jump_to(idx - 1); st.rerun()
+    
+    if next_clicked:
+        jump_to(idx + 1); st.rerun()
 
-    # --- [수정됨] 버튼 레이아웃을 위한 컬럼 사용 ---
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button('◀ Previous', use_container_width=True):
-            jump_to(idx - 1)
-            st.rerun()
-    with c2:
-        if st.button('Next ▶', use_container_width=True):
-            jump_to(idx + 1)
-            st.rerun()
-
-    c3, c4 = st.columns(2)
-    with c3:
-        if st.button('First in Category', use_container_width=True, disabled=not current):
-            cat = current['zone']
-            for i, r in enumerate(my_list):
-                if r['zone'] == cat:
-                    jump_to(i); st.rerun(); break
-    with c4:
-        if st.button('Last in Category', use_container_width=True, disabled=not current):
-            cat = current['zone']
-            for i in range(len(my_list) - 1, -1, -1):
-                if my_list[i]['zone'] == cat:
-                    jump_to(i); st.rerun(); break
+    if first_cat_clicked and current:
+        cat = current['zone']
+        for i, r in enumerate(my_list):
+            if r['zone'] == cat:
+                jump_to(i); st.rerun(); break
+    
+    if last_cat_clicked and current:
+        cat = current['zone']
+        for i in range(len(my_list) - 1, -1, -1):
+            if my_list[i]['zone'] == cat:
+                jump_to(i); st.rerun(); break
 
     st.divider()
     if st.button('↩️ 초기화 및 나가기'):
         for key in st.session_state.keys():
             del st.session_state[key]
         st.rerun()
+
+
+
+
 # --- 화면 라우팅 ---
 if st.session_state.started:
     render_running()
