@@ -62,68 +62,57 @@ def sort_key(row):
 #수정해야함
 
 def parse_dataframe(df):
-    """업로드된 DF를 표준 컬럼으로 정리 (진단용 코드 포함)"""
+    """
+    업로드된 DF를 표준 컬럼으로 정리
+    (규칙 확정: 바코드는 '스타일명'의 2번째 글자부터 6글자 중 숫자 5자리)
+    """
     import re
-    import streamlit as st # 진단을 위해 streamlit 라이브러리를 사용합니다.
-
     out = []
     cols = list(df.columns)
     
-    # --- 진단 파트 1: 헤더(열 이름)가 어떻게 인식되었는지 확인 ---
-    st.warning("--- [진단 로그] 헤더 인식 결과 ---")
+    # 모든 가능한 헤더 이름을 찾습니다.
     k_location = key_of(cols, {'location','로케이션','bin','shelf','loc','위치'})
     k_qty = key_of(cols, {'qty','수량','quantity', '주문수량'})
     k_size = key_of(cols, {'size','사이즈'})
     k_color = key_of(cols, {'색상명','colorname','color','색상'})
     k_style = key_of(cols, {'스타일명','stylename','product','제품명','name'})
-    k_barcode = key_of(cols, {'barcode','바코드','upc','ean'})
-    st.write(f"인식된 '로케이션' 헤더: `{k_location}`")
-    st.write(f"인식된 '색상명' 헤더: `{k_color}`")
-    st.write(f"인식된 '바코드' 헤더: `{k_barcode}`")
-    st.warning("------------------------------------")
 
     for i, r in df.iterrows():
         location = str(r.get(k_location, '')).strip()
         if not location: continue
 
-        # --- 진단 파트 2: 첫 번째 데이터 행이 어떻게 처리되는지 확인 (단 한 번만 실행) ---
-        if i == 0:
-            st.info("--- [진단 로그] 첫 번째 데이터 행 처리 과정 ---")
-            original_color_data = r.get(k_color, '')
-            original_barcode_data = r.get(k_barcode, '')
-            st.write(f"원본 '색상명' 데이터: `{original_color_data}`")
-            st.write(f"원본 '바코드' 데이터: `{original_barcode_data}`")
+        # 1단계: '스타일명' 원본 데이터를 가져옵니다.
+        style_original = str(r.get(k_style, ''))
         
-        # 1단계: '색상명'에서 바코드와 컬러를 먼저 분리
-        bc_from_color = split_barcode_color(r.get(k_color, ''))
-        color = bc_from_color['color']
-        barcode5 = bc_from_color['barcode5']
+        # 2단계: 바코드 추출 (사용자님이 알려주신 규칙 적용!)
+        barcode5 = ''
+        if len(style_original) > 1:
+            # 2번째 글자부터 6글자를 잘라냅니다. (=MID(..., 2, 6))
+            mid_text = style_original[1:7] 
+            # 그 안에서 연속된 숫자 5자리를 찾습니다.
+            m = re.search(r'(\d{5})', mid_text)
+            if m:
+                barcode5 = m.group(1)
+
+        # 3단계: 바코드를 제외한 순수 '스타일명'과 '품번'을 분리합니다.
+        style_info = split_style(style_original)
+        styleName = style_info['styleName']
+        # 바코드를 찾았다면, 그것을 최종 품번(styleCode)으로 사용합니다.
+        styleCode = barcode5 if barcode5 else style_info['styleCode']
+
+        # 4단계: '색상명'에서 컬러만 가져옵니다.
+        color_info = split_barcode_color(r.get(k_color, ''))
+        color = color_info['color']
         
-        if i == 0:
-            st.write(f"  ➡️ '색상명'에서 분리된 바코드: `{barcode5}`, 컬러: `{color}`")
-
-        # 2단계: '바코드' 전용 칸이 있는지 확인하고, 값이 있다면 그것으로 덮어쓰기
-        if k_barcode:
-            raw_barcode = str(r.get(k_barcode, '')).strip()
-            if raw_barcode:
-                m = re.search(r'(\d{5})', raw_barcode)
-                if m:
-                    barcode5 = m.group(1)
-                    if i == 0:
-                        st.write(f"  ➡️ '바코드' 칸에서 최종 추출된 바코드: `{barcode5}`")
-        
-        if i == 0:
-            st.info("------------------------------------------")
-
-
         out.append({
             'id': int(i),
             'location': location,
             'qty': str(r.get(k_qty, '1')).strip() or '1',
             'size': str(r.get(k_size, '')).strip(),
             'color': color,
-            'barcode5': barcode5,
-            **split_style(r.get(k_style, '')),
+            'barcode5': barcode5, # <-- 여기에 최종 추출된 바코드가 들어갑니다!
+            'styleCode': styleCode,
+            'styleName': styleName,
             'zone': get_zone(location),
         })
     return out
