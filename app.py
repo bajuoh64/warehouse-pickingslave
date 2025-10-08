@@ -59,7 +59,7 @@ def sort_key(row):
     loc = str(row.get('location', '')).upper()
     return f"{base:03d}-{loc}"
 
-def parse_dataframe(df: pd.DataFrame):
+def parse_dataframe(df): 
     import pandas as pd
     cols = list(df.columns)
     k_location = key_of(cols, {'location','로케이션','bin','shelf','loc','위치'})
