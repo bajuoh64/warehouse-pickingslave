@@ -187,18 +187,6 @@ def render_setup():
 
 # --- 화면 2: 피킹 진행 ---
 def render_running():
-    # --- [수정됨] 버튼 레이아웃 강제 CSS (더 강력한 버전으로 변경) ---
-    st.markdown("""
-    <style>
-        /* Streamlit의 column 내부 div에 직접 flex 속성을 적용하여 가로 정렬을 강제합니다. */
-        div.st-emotion-cache-1e5k5j9.e1f1d6gn3 {
-            display: flex;
-            flex-direction: row;
-            gap: 8px; /* 버튼 사이 간격 */
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
     pno = st.session_state.picker_no
     my_list = st.session_state.packs[pno - 1] if len(st.session_state.packs) >= pno else []
     prog = st.session_state.progress.get(pno, {'idx': 0, 'done_ids': set()})
@@ -224,7 +212,6 @@ def render_running():
         st.divider()
 
     if current:
-        # (피킹 정보 표시는 이전과 동일)
         st.markdown(f"**다음 로케이션**: :green[{next_item['location'] if next_item else '없음'}]")
         st.header(current['location'])
         c1, c2 = st.columns(2)
@@ -244,24 +231,55 @@ def render_running():
 
     is_done = current and current['id'] in prog.get('done_ids', set())
 
-    # --- [수정됨] 버튼 로직: 그리기와 동작 처리를 분리 ---
+    # --- [최종 수정] 버튼 로직: HTML 직접 삽입 방식으로 변경 ---
     
-    # 1. OK / 완료 취소 버튼 그리기
+    # 1. OK / 완료 취소 버튼 그리기 (이전과 동일)
     if is_done:
         ok_clicked = st.button('완료 취소 ↩️', type='secondary', use_container_width=True)
     else:
         ok_clicked = st.button('OK! ✅', type='primary', use_container_width=True, disabled=not current)
 
-    # 2. 나머지 버튼들 그리기 (변수에 클릭 결과 저장)
-    c1, c2 = st.columns(2)
-    prev_clicked = c1.button('◀ Previous', use_container_width=True)
-    next_clicked = c2.button('Next ▶', use_container_width=True)
-    
-    c3, c4 = st.columns(2)
-    first_cat_clicked = c3.button('First in Category', use_container_width=True, disabled=not current)
-    last_cat_clicked = c4.button('Last in Category', use_container_width=True, disabled=not current)
+    # 2. 나머지 버튼들을 HTML로 직접 그리기
+    # 버튼 클릭을 감지하기 위해 Streamlit의 쿼리 파라미터를 사용합니다.
+    st.write(
+        """
+        <style>
+            .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+            .btn-grid button { width: 100%; }
+        </style>
+        <div class="btn-grid">
+            <a href="?action=prev" target="_self"><button class="st-emotion-cache-70003y e1nzilvr2">◀ Previous</button></a>
+            <a href="?action=next" target="_self"><button class="st-emotion-cache-70003y e1nzilvr2">Next ▶</button></a>
+        </div>
+        <div class="btn-grid">
+            <a href="?action=first_cat" target="_self"><button class="st-emotion-cache-70003y e1nzilvr2">First in Category</button></a>
+            <a href="?action=last_cat" target="_self"><button class="st-emotion-cache-70003y e1nzilvr2">Last in Category</button></a>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    # 3. 모든 버튼을 다 그린 후에, 클릭된 버튼에 대한 동작 처리
+    # 3. URL의 쿼리 파라미터를 읽어와서 어떤 버튼이 눌렸는지 확인하고 동작 처리
+    query_params = st.query_params
+    action = query_params.get("action")
+
+    if action:
+        st.query_params.clear() # 처리 후 파라미터 즉시 제거
+        if action == "prev":
+            jump_to(idx - 1); st.rerun()
+        elif action == "next":
+            jump_to(idx + 1); st.rerun()
+        elif action == "first_cat" and current:
+            cat = current['zone']
+            for i, r in enumerate(my_list):
+                if r['zone'] == cat:
+                    jump_to(i); st.rerun(); break
+        elif action == "last_cat" and current:
+            cat = current['zone']
+            for i in range(len(my_list) - 1, -1, -1):
+                if my_list[i]['zone'] == cat:
+                    jump_to(i); st.rerun(); break
+
     if ok_clicked and current:
         if is_done:
             prog['done_ids'].remove(current['id'])
@@ -269,31 +287,12 @@ def render_running():
             prog['done_ids'].add(current['id'])
             jump_to(idx + 1)
         st.rerun()
-    
-    if prev_clicked:
-        jump_to(idx - 1); st.rerun()
-    
-    if next_clicked:
-        jump_to(idx + 1); st.rerun()
-
-    if first_cat_clicked and current:
-        cat = current['zone']
-        for i, r in enumerate(my_list):
-            if r['zone'] == cat:
-                jump_to(i); st.rerun(); break
-    
-    if last_cat_clicked and current:
-        cat = current['zone']
-        for i in range(len(my_list) - 1, -1, -1):
-            if my_list[i]['zone'] == cat:
-                jump_to(i); st.rerun(); break
 
     st.divider()
     if st.button('↩️ 초기화 및 나가기'):
         for key in st.session_state.keys():
             del st.session_state[key]
         st.rerun()
-
 
 
 
