@@ -1,521 +1,306 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-# ✅ 피킹 최적화 웹 애플리케이션 v1.2 — 단일 파일 React 컴포넌트
-# 요구사항 반영:
-# - 엑셀(xlsx) / CSV 업로드 → JSON 변환 (xlsx 라이브러리)
-# - '색상명'에서 바코드/컬러 분리, '스타일명'에서 품번/스타일명 분리
-# - 마스터 정렬 기준표(완벽한 동선)로 정렬 후 N명 균등 분배
-# - 피커별 화면: 다음 로케이션(녹색, 미리보기) / 현재 로케이션(크게) / 사이즈·수량(수량은 빨간색)
-# - 바코드 5자리/컬러명: 노란색 박스, 컬러명 강조
-# - 스타일명(제품명) 표시
-# - 제어 버튼: [OK!] / [Previous] [Next] / [First in Category] [Last in Category]
-# - 메인(설정) 화면: 업로드, 인원 선택(1~6), 시작, Clear Data
-# - 진행 상태: 로컬 저장(LocalStorage). 피커 번호는 URL 쿼리 ?picker=1 로 접속해도 설정됨.
-# - iPhone Safari 고려: 큰 터치 타겟, 시스템 폰트, 헤더 고정, 3D Touch 이슈 회피.
+# -*- coding: utf-8 -*-
+import re
+import io
+import math
+import pandas as pd
+import streamlit as st
 
-# ⚠️ 주의: 이 파일은 ChatGPT Canvas 미리보기 기준으로 작성되었습니다. 빌드 환경에서는
-#   `npm install xlsx` 후 사용하세요. (Canvas에서는 가정상 사용 가능)
-import * as XLSX from "xlsx";
+# -------------------------------------------------------------
+# 피킹 최적화 웹 애플리케이션 (Streamlit · Python) — 최종본 v1.2
+# -------------------------------------------------------------
+# 기능 요약
+# - 엑셀(xlsx)·CSV 업로드 → JSON 변환
+# - '색상명'에서 바코드5 / 컬러명 분리, '스타일명'에서 품번 / 스타일명 분리
+# - 마스터 동선표에 따른 정렬, N명 균등 분배(동선 끊김 최소화)
+# - 피커별 화면: 다음 로케이션 / 현재 로케이션 / 사이즈 / 수량 / 바코드5 / 컬러 / 스타일명
+# - 제어 버튼: OK! / Previous / Next / First in Category / Last in Category
+# - 진행상태는 세션에 저장. Clear Data로 초기화
+# -------------------------------------------------------------
 
-export default function App() {
-  // --------- 전역 상태 ---------
-  const [rawRows, setRawRows] = useState([]); // 업로드 직후 원본(정렬 전)
-  const [sortedRows, setSortedRows] = useState([]); // 마스터 동선 정렬 후
-  const [pickers, setPickers] = useState(1); // 인원 수
-  const [started, setStarted] = useState(false); // 피킹 시작 여부
+st.set_page_config(page_title="피킹 최적화 웹앱 v1.2", layout="centered")
 
-  // 피커 선택(메인/진행 화면 공통). URL ?picker=1 우선, 없으면 state 사용
-  const [pickerNo, setPickerNo] = useState(1);
+# --------------- 유틸 ---------------
+def key_of(obj_keys, candidates):
+    """다국어/여러 변형 헤더 후보 중 매칭되는 실제 키 반환"""
+    for raw in obj_keys:
+        k = str(raw).lower().replace(' ', '')
+        if k in candidates:
+            return raw
+    return None
 
-  // 피커별 진행 인덱스와 완료 상태 (로컬)
-  const [progressByPicker, setProgressByPicker] = useState({}); // {1:{idx:0, doneIds:Set([...])}, ...}
+def split_barcode_color(value):
+    """'78681,BLACK/WHITE' → (barcode5='78681', color='BLACK/WHITE')"""
+    s = str(value or '').strip()
+    if not s:
+        return {'barcode5': '', 'color': ''}
+    m = re.match(r'^(\d{5})[,\-\s]*(.+)$', s)
+    if m:
+        return {'barcode5': m.group(1), 'color': m.group(2).strip()}
+    if re.match(r'^\d{5}$', s):
+        return {'barcode5': s, 'color': ''}
+    return {'barcode5': '', 'color': s}
 
-  const fileInputRef = useRef(null);
+def split_style(value):
+    """'[41303,MULTI]DEUS ...' → (styleCode='41303', styleName='DEUS ...')"""
+    s = str(value or '').strip()
+    if not s:
+        return {'styleCode': '', 'styleName': ''}
+    m = re.match(r'^\[(\d+)[^\]]*\](.*)$', s)
+    if m:
+        return {'styleCode': m.group(1), 'styleName': m.group(2).strip()}
+    return {'styleCode': '', 'styleName': s}
 
-  // --------- LocalStorage Load ---------
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("pick_opt_v12_state") || "null");
-      if (saved) {
-        setRawRows(saved.rawRows || []);
-        setSortedRows(saved.sortedRows || []);
-        setPickers(saved.pickers || 1);
-        setStarted(!!saved.started);
-        setProgressByPicker(reviveProgress(saved.progressByPicker || {}));
-        if (saved.pickerNo) setPickerNo(saved.pickerNo);
-      }
-    } catch {}
-  }, []);
+def get_zone(location):
+    """로케이션 코드에서 3~4자리 접두 구역 추출 (예: 1FC12 → 1FC, 3MH-07 → 3MH)"""
+    s = str(location or '').upper().strip()
+    if not s:
+        return ''
+    m = re.match(r'^[A-Z0-9]{3,4}', s)
+    return m.group(0) if m else s
 
-  // URL 쿼리에서 picker= 추출
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const p = Number(params.get("picker"));
-    if (p && p >= 1 && p <= 6) setPickerNo(p);
-  }, []);
+# 마스터 동선표 (예시). 실제 창고 동선에 맞게 커스터마이즈 가능
+MASTER_ORDER = [
+    '1FA', '1FB', '1FC', '1FD', '1FE', '1FF', '1FG', '1FH',
+    'CC',
+    '2MA', '2MB', '2MC', '2MD', '2ME',
+    '3MA', '3MB', '3MC', '3MD', '3ME', '3MF', '3MG', '3MH',
+    'DECK', 'ACC', 'ETC'
+]
 
-  // --------- LocalStorage Save ---------
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        "pick_opt_v12_state",
-        JSON.stringify({
-          rawRows,
-          sortedRows,
-          pickers,
-          started,
-          pickerNo,
-          progressByPicker: serializeProgress(progressByPicker),
+def sort_key(row):
+    zone = row.get('zone', '')
+    base = MASTER_ORDER.index(zone) if zone in MASTER_ORDER else 999
+    loc = str(row.get('location', '')).upper()
+    return f"{base:03d}-{loc:>15}"
+
+# --------------- 데이터 파싱 ---------------
+def parse_dataframe(df: pd.DataFrame):
+    """업로드된 DF를 표준 컬럼으로 정리"""
+    cols = list(df.columns)
+    k_location = key_of(cols, {'location','로케이션','bin','shelf','loc','위치'})
+    k_qty      = key_of(cols, {'qty','수량','quantity'})
+    k_size     = key_of(cols, {'size','사이즈'})
+    k_color    = key_of(cols, {'색상명','colorname','color','색상'})
+    k_style    = key_of(cols, {'스타일명','stylename','product','제품명','name'})
+    k_barcode  = key_of(cols, {'barcode','바코드','upc','ean'})
+
+    out = []
+    for i, r in df.iterrows():
+        location = str(r.get(k_location, '')).strip()
+        qty      = str(r.get(k_qty, '1')).strip() or '1'
+        size     = str(r.get(k_size, '')).strip()
+
+        bc_color = split_barcode_color(r.get(k_color, ''))
+        color    = bc_color['color']
+        barcode5 = bc_color['barcode5']
+
+        st_info   = split_style(r.get(k_style, ''))
+        styleCode = st_info['styleCode']
+        styleName = st_info['styleName']
+
+        raw_bar   = str(r.get(k_barcode, '')).strip()
+        if raw_bar:
+            m = re.search(r'(\d{5})', raw_bar)
+            if m:
+                barcode5 = m.group(1)
+
+        out.append({
+            'id': int(i),
+            'location': location,
+            'qty': qty,
+            'size': size,
+            'color': color,
+            'barcode5': barcode5,
+            'styleCode': styleCode,
+            'styleName': styleName,
+            'zone': get_zone(location),
         })
-      );
-    } catch {}
-  }, [rawRows, sortedRows, pickers, started, pickerNo, progressByPicker]);
+    return out
 
-  // --------- 마스터 정렬 기준표 (동선) ---------
-  // 예시: 로케이션 접두/구역을 순서로 나열. 실제 창고 동선에 맞게 자유롭게 수정 가능.
-  const MASTER_ORDER = useMemo(
-    () => [
-      // 1층
-      "1FA", "1FB", "1FC", "1FD", "1FE", "1FF", "1FG", "1FH",
-      // CC(카운터/캐시 근처)
-      "CC",
-      // 2층
-      "2MA", "2MB", "2MC", "2MD", "2ME",
-      // 3층 일반
-      "3MA", "3MB", "3MC", "3MD", "3ME", "3MF", "3MG", "3MH",
-      // DECK / 악세사리 / 기타
-      "DECK", "ACC", "ETC"
-    ],
-    []
-  );
+def distribute(sorted_rows, n_pickers):
+    """정렬된 리스트를 N명에게 구간 분할로 균등 분배"""
+    n = max(1, min(6, int(n_pickers or 1)))
+    per = math.ceil(len(sorted_rows) / n) if len(sorted_rows) else 0
+    packs = [sorted_rows[i*per:(i+1)*per] for i in range(n)]
+    return packs
 
-  // 로케이션에서 카테고리/구역 키 추출
-  function getZone(loc) {
-    const s = String(loc || "").toUpperCase();
-    // 접두 3~4자 추출 (예: 1FC12 → 1FC, 3MH-07 → 3MH)
-    const m = s.match(/^[A-Z0-9]{3,4}/);
-    return m ? m[0] : s || "";
-  }
+# --------------- 세션 상태 초기화 ---------------
+if 'raw_rows' not in st.session_state:
+    st.session_state.raw_rows = []
+if 'sorted_rows' not in st.session_state:
+    st.session_state.sorted_rows = []
+if 'pickers' not in st.session_state:
+    st.session_state.pickers = 1
+if 'started' not in st.session_state:
+    st.session_state.started = False
+if 'picker_no' not in st.session_state:
+    st.session_state.picker_no = 1
+if 'packs' not in st.session_state:
+    st.session_state.packs = []
+if 'progress' not in st.session_state:
+    # {1: {'idx':0,'done_ids':set()}, ...}
+    st.session_state.progress = {}
 
-  // 마스터 정렬용 키 생성
-  function sortKeyByMaster(row) {
-    const z = getZone(row.location);
-    const base = MASTER_ORDER.indexOf(z);
-    const rank = base === -1 ? 999 : base; // 목록에 없으면 뒤로
-    // 같은 구역 내에서는 로케이션 코드의 숫자/문자 기준으로 2차 정렬
-    return `${String(rank).padStart(3, "0")}-${String(row.location || "").padStart(10, "0")}`;
-  }
+# --------------- 메인/설정 화면 ---------------
+def render_setup():
+    st.title('📦 피킹 최적화 웹앱 v1.2')
 
-  // --------- 엑셀/CSV 파서 ---------
-  function handleFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    up = st.file_uploader('엑셀(xlsx) 또는 CSV 업로드', type=['xlsx','xls','csv'])
+    if up is not None:
+        try:
+            if up.name.lower().endswith('.csv'):
+                df = pd.read_csv(up, dtype=str, keep_default_na=False)
+            else:
+                df = pd.read_excel(up, dtype=str, engine='openpyxl')
+            parsed = parse_dataframe(df)
+            st.session_state.raw_rows = parsed
+            st.session_state.started = False
+            st.success(f"{len(parsed)}개 항목을 불러왔습니다.")
+        except Exception as e:
+            st.error(f"파일 파싱 중 오류: {e}")
 
-    const reader = new FileReader();
-    const isXlsx = /\.xlsx?$/i.test(file.name);
+    st.write('---')
+    st.subheader('작업자 수 선택')
+    cols = st.columns(6)
+    for i, n in enumerate([1,2,3,4,5,6]):
+        with cols[i]:
+            clicked = st.button(f"{n}", use_container_width=True, type=('primary' if st.session_state.pickers==n else 'secondary'))
+            if clicked:
+                st.session_state.pickers = n
+                if st.session_state.picker_no > n:
+                    st.session_state.picker_no = n
 
-    reader.onload = () => {
-      try {
-        let rows = [];
-        if (isXlsx) {
-          const wb = XLSX.read(reader.result, { type: "array" });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
-        } else {
-          // CSV
-          const text = new TextDecoder("utf-8").decode(reader.result);
-          rows = parseCSV(text);
-        }
-        const normalized = rows.map((r, i) => normalizeRow(r, i));
-        setRawRows(normalized);
-        setStarted(false);
-      } catch (err) {
-        alert("파일 파싱 중 오류가 발생했습니다.\n" + err.message);
-      }
-    };
+    st.write('피커 번호 선택: ', end='')
+    pick_buttons = st.columns(st.session_state.pickers)
+    for i in range(st.session_state.pickers):
+        with pick_buttons[i]:
+            b = st.button(f"#{i+1}", use_container_width=True, type=('primary' if st.session_state.picker_no==i+1 else 'secondary'))
+            if b:
+                st.session_state.picker_no = i+1
 
-    if (isXlsx) reader.readAsArrayBuffer(file);
-    else reader.readAsArrayBuffer(file); // CSV도 ArrayBuffer로 받아 수동 디코딩
-  }
+    st.write('---')
+    c1, c2 = st.columns(2)
+    with c1:
+        start = st.button('피킹 시작하기', type='primary', use_container_width=True, disabled=(len(st.session_state.raw_rows)==0))
+    with c2:
+        clear = st.button('Clear Data', use_container_width=True)
 
-  // 헤더 키 정규화 유틸
-  function keyOf(obj, candidates) {
-    const keys = Object.keys(obj);
-    for (const raw of keys) {
-      const k = String(raw).toLowerCase().replace(/\s+/g, "");
-      if (candidates.includes(k)) return raw; // 원본 키 반환
-    }
-    return null;
-  }
+    if start:
+        # 정렬 및 분배
+        sorted_rows = sorted(st.session_state.raw_rows, key=sort_key)
+        st.session_state.sorted_rows = sorted_rows
+        packs = distribute(sorted_rows, st.session_state.pickers)
+        st.session_state.packs = packs
+        # 진행상태 초기화
+        st.session_state.progress = {p:{'idx':0,'done_ids':set()} for p in range(1, st.session_state.pickers+1)}
+        st.session_state.started = True
 
-  // '색상명' → "78681,BLACK/WHITE" 형식 파싱
-  function splitBarcodeColor(v) {
-    const s = String(v || "").trim();
-    if (!s) return { color: "", barcode5: "" };
-    // 앞 5자리 숫자 + 콤마 + 컬러명 패턴 우선
-    const m = s.match(/^(\d{5})[,\-\s]*(.+)$/);
-    if (m) return { barcode5: m[1], color: m[2].trim() };
-    // 숫자 5자리만 있는 경우
-    if (/^\d{5}$/.test(s)) return { barcode5: s, color: "" };
-    // 컬러명만 있는 경우
-    return { barcode5: "", color: s };
-  }
+    if clear:
+        st.session_state.raw_rows = []
+        st.session_state.sorted_rows = []
+        st.session_state.pickers = 1
+        st.session_state.started = False
+        st.session_state.picker_no = 1
+        st.session_state.packs = []
+        st.session_state.progress = {}
+        st.experimental_rerun()
 
-  // '스타일명' → "[41303,MULTI]DEUS ..." 형식 파싱
-  function splitStyle(v) {
-    const s = String(v || "").trim();
-    if (!s) return { styleCode: "", styleName: "" };
-    const m = s.match(/^\[(\d+)[^\]]*\](.*)$/);
-    if (m) return { styleCode: m[1], styleName: m[2].trim() };
-    return { styleCode: "", styleName: s };
-  }
+    if len(st.session_state.raw_rows):
+        st.caption('미리보기 (상위 10개)')
+        st.dataframe(pd.DataFrame(st.session_state.raw_rows).head(10))
 
-  function normalizeRow(r, i) {
-    // 다양한 헤더 대응 (한국어/영어 혼용)
-    const kLocation = keyOf(r, ["location", "로케이션", "bin", "shelf", "loc", "위치"]);
-    const kQty = keyOf(r, ["qty", "수량", "quantity"]);
-    const kSize = keyOf(r, ["size", "사이즈"]);
-    const kColorName = keyOf(r, ["색상명", "colorname", "color", "색상"]);
-    const kStyleName = keyOf(r, ["스타일명", "stylename", "product", "제품명", "name"]);
-    const kBarcode = keyOf(r, ["barcode", "바코드", "upc", "ean"]);
+# --------------- 진행 화면 ---------------
+def render_running():
+    pno = st.session_state.picker_no
+    packs = st.session_state.packs
+    my_list = packs[pno-1] if packs and len(packs) >= pno else []
+    prog = st.session_state.progress.get(pno, {'idx':0,'done_ids':set()})
+    idx = min(max(0, prog['idx']), max(0, len(my_list)-1)) if my_list else 0
+    current = my_list[idx] if my_list else None
+    next_item = my_list[idx+1] if my_list and idx+1 < len(my_list) else None
 
-    const location = (r[kLocation] ?? "").toString().trim();
-    const qty = String(r[kQty] ?? "1").toString().trim() || "1";
-    const size = (r[kSize] ?? "").toString().trim();
+    done_count = sum(1 for r in my_list if r['id'] in prog['done_ids'])
+    total = len(my_list)
+    pct = int(round((done_count/total)*100)) if total else 0
 
-    // 색상명에서 바코드5/컬러 분리 (없으면 별도로 바코드 컬럼 사용)
-    const { barcode5: bc5_from_color, color } = splitBarcodeColor(r[kColorName]);
-    let barcode5 = bc5_from_color;
+    st.title(f"피커 #{pno} · {done_count}/{total} ({pct}%)")
+    st.progress(pct/100 if total else 0.0)
 
-    // 스타일명에서 품번/스타일명 분리
-    const { styleCode, styleName } = splitStyle(r[kStyleName]);
+    box = st.container()
+    with box:
+        st.markdown(f"**다음 제품 로케이션**: :green[{next_item.get('location','-') if next_item else '-'}]")
+        st.markdown(f"### {current.get('location','-') if current else '-'}")  # 현재 로케이션 크게
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f"**사이즈**: {current.get('size','-') if current else '-'}")
+        with c2:
+            st.markdown(f"**수량**: :red[{current.get('qty','1') if current else '1'}]")
 
-    // 별도 바코드 컬럼이 있으면 우선 사용 → 5자리만 취득
-    const rawBarcode = (r[kBarcode] ?? "").toString().trim();
-    if (rawBarcode) {
-      const m = rawBarcode.match(/(\d{5})/);
-      if (m) barcode5 = m[1];
-    }
+        st.markdown("> 바코드 5자리 / 컬러") 
+        st.info(f"바코드: `{current.get('barcode5','') if current else ''}`\n컬러: **{current.get('color','-') if current else '-'}**")  # 노란 박스 느낌은 info로 대체
 
-    return {
-      id: i,
-      location,
-      qty,
-      size,
-      color,
-      barcode5,
-      styleCode,
-      styleName,
-      // 구역 키
-      zone: getZone(location),
-    };
-  }
+        st.caption(f"스타일명: {current.get('styleName','-') if current else '-'}" + (f"  (코드 {current.get('styleCode','')})" if current and current.get('styleCode') else ''))
 
-  // CSV 파싱 (간단 처리)
-  function parseCSV(text) {
-    const lines = text.split(/\r?\n/).filter((l) => l.trim().length);
-    if (!lines.length) return [];
-    const headers = splitCSVLine(lines[0]);
-    const rows = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cols = splitCSVLine(lines[i]);
-      const row = {};
-      headers.forEach((h, idx) => (row[h] = cols[idx] ?? ""));
-      rows.push(row);
-    }
-    return rows;
-  }
+    st.write('')
+    ok = st.button('OK! ✅', type='primary', use_container_width=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        prev = st.button('Previous', use_container_width=True)
+    with c2:
+        nxt = st.button('Next', use_container_width=True)
+    c3, c4 = st.columns(2)
+    with c3:
+        first_cat = st.button('First in Category', use_container_width=True)
+    with c4:
+        last_cat = st.button('Last in Category', use_container_width=True)
 
-  function splitCSVLine(line) {
-    const out = [];
-    let cur = "";
-    let q = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (q && line[i + 1] === '"') {
-          cur += '"';
-          i++;
-        } else {
-          q = !q;
-        }
-      } else if (ch === "," && !q) {
-        out.push(cur);
-        cur = "";
-      } else {
-        cur += ch;
-      }
-    }
-    out.push(cur);
-    return out;
-  }
+    def jump_to(i):
+        i = max(0, min(i, max(0, len(my_list)-1)))
+        st.session_state.progress[pno]['idx'] = i
 
-  // --------- 시작: 정렬 & 분배 ---------
-  const distributed = useMemo(() => {
-    if (!rawRows.length) return [];
-    // 마스터 정렬
-    const sorted = [...rawRows].sort((a, b) => (sortKeyByMaster(a) < sortKeyByMaster(b) ? -1 : 1));
-    setSortedRows(sorted);
+    if ok and current:
+        st.session_state.progress[pno]['done_ids'].add(current['id'])
+        jump_to(idx+1)
+        st.experimental_rerun()
 
-    // N명 균등 분배 (라운드로빈 대신 구간 나누기 — 동선 끊김 최소화)
-    const n = Math.max(1, Math.min(6, pickers || 1));
-    const per = Math.ceil(sorted.length / n);
-    const packs = Array.from({ length: n }, (_, i) => sorted.slice(i * per, (i + 1) * per));
-    return packs;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawRows, pickers, started]);
+    if prev:
+        jump_to(idx-1)
+        st.experimental_rerun()
 
-  // 현재 피커의 리스트
-  const myList = useMemo(() => {
-    if (!distributed.length) return [];
-    const idx = Math.max(1, Math.min(pickers, pickerNo)) - 1;
-    return distributed[idx] || [];
-  }, [distributed, pickers, pickerNo]);
+    if nxt:
+        jump_to(idx+1)
+        st.experimental_rerun()
 
-  const myProg = progressByPicker[pickerNo] || { idx: 0, doneIds: new Set() };
-  const myIdx = Math.max(0, Math.min((myList.length || 1) - 1, myProg.idx || 0));
-  const current = myList[myIdx] || null;
-  const nextItem = myList[myIdx + 1] || null;
+    if first_cat and current:
+        cat = current['zone']
+        for i, r in enumerate(my_list):
+            if r['zone'] == cat:
+                jump_to(i)
+                st.experimental_rerun()
+                break
 
-  const doneCount = myList.filter((r) => myProg.doneIds?.has?.(r.id)).length;
+    if last_cat and current:
+        cat = current['zone']
+        for i in range(len(my_list)-1, -1, -1):
+            if my_list[i]['zone'] == cat:
+                jump_to(i)
+                st.experimental_rerun()
+                break
 
-  // --------- 이벤트 핸들러 ---------
-  function startPicking() {
-    if (!rawRows.length) return alert("파일을 먼저 업로드하세요.");
-    if (!pickers) return alert("작업자 수를 선택하세요.");
-    // 진행 상태 초기화
-    const init = {};
-    for (let p = 1; p <= pickers; p++) init[p] = { idx: 0, doneIds: new Set() };
-    setProgressByPicker(init);
-    setStarted(true);
-  }
+    st.write('---')
+    if st.button('초기화 및 나가기', help='모든 데이터를 초기화합니다.'):
+        st.session_state.raw_rows = []
+        st.session_state.sorted_rows = []
+        st.session_state.pickers = 1
+        st.session_state.started = False
+        st.session_state.picker_no = 1
+        st.session_state.packs = []
+        st.session_state.progress = {}
+        st.experimental_rerun()
 
-  function markOk() {
-    if (!current) return;
-    const next = cloneProgress(progressByPicker);
-    const me = next[pickerNo] || { idx: 0, doneIds: new Set() };
-    me.doneIds.add(current.id);
-    me.idx = Math.min(myIdx + 1, Math.max(0, myList.length - 1));
-    next[pickerNo] = me;
-    setProgressByPicker(next);
-    // 모바일 진동
-    if (navigator.vibrate) navigator.vibrate(30);
-  }
+# --------------- 라우팅 ---------------
+if not st.session_state.started:
+    render_setup()
+else:
+    render_running()
 
-  function goPrev() {
-    const next = cloneProgress(progressByPicker);
-    const me = next[pickerNo] || { idx: 0, doneIds: new Set() };
-    me.idx = Math.max(0, myIdx - 1);
-    next[pickerNo] = me;
-    setProgressByPicker(next);
-  }
-
-  function goNext() {
-    const next = cloneProgress(progressByPicker);
-    const me = next[pickerNo] || { idx: 0, doneIds: new Set() };
-    me.idx = Math.min(myIdx + 1, Math.max(0, myList.length - 1));
-    next[pickerNo] = me;
-    setProgressByPicker(next);
-  }
-
-  function jumpFirstInCategory() {
-    if (!current) return;
-    const cat = current.zone;
-    const pos = myList.findIndex((r) => r.zone === cat);
-    if (pos >= 0) jumpTo(pos);
-  }
-
-  function jumpLastInCategory() {
-    if (!current) return;
-    const cat = current.zone;
-    // 뒤에서 찾기
-    for (let i = myList.length - 1; i >= 0; i--) {
-      if (myList[i].zone === cat) return jumpTo(i);
-    }
-  }
-
-  function jumpTo(i) {
-    const next = cloneProgress(progressByPicker);
-    const me = next[pickerNo] || { idx: 0, doneIds: new Set() };
-    me.idx = Math.max(0, Math.min(i, Math.max(0, myList.length - 1)));
-    next[pickerNo] = me;
-    setProgressByPicker(next);
-  }
-
-  function clearData() {
-    if (!confirm("모든 데이터를 초기화하고 시작 화면으로 돌아갈까요?")) return;
-    setRawRows([]);
-    setSortedRows([]);
-    setPickers(1);
-    setStarted(false);
-    setProgressByPicker({});
-  }
-
-  function onPickersButton(n) {
-    setPickers(n);
-    if (pickerNo > n) setPickerNo(n);
-  }
-
-  // --------- 렌더 ---------
-  if (!started) {
-    return (
-      <div className="min-h-screen bg-white text-gray-900">
-        <Header title="피킹 최적화 웹앱 v1.2" />
-        <main className="mx-auto max-w-xl px-4 py-6">
-          <div className="rounded-2xl border shadow-sm p-5">
-            <h2 className="text-lg font-bold mb-3">파일 업로드</h2>
-            <div className="flex items-center gap-2">
-              <button
-                className="btn-secondary"
-                onClick={() => fileInputRef.current?.click()}
-              >파일 선택</button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="hidden"
-                onChange={handleFile}
-              />
-              <span className="text-sm text-gray-600 truncate">
-                {rawRows.length ? `${rawRows.length}개 항목 로드됨` : "xlsx 또는 csv 파일을 선택하세요"}
-              </span>
-            </div>
-
-            <div className="h-px bg-gray-200 my-5" />
-
-            <h2 className="text-lg font-bold mb-2">작업자 수 선택</h2>
-            <div className="grid grid-cols-6 gap-2">
-              {[1, 2, 3, 4, 5, 6].map((n) => (
-                <button key={n} className={`btn-number ${pickers === n ? "active" : ""}`} onClick={() => onPickersButton(n)}>
-                  {n}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-3 text-sm text-gray-600">
-              피커 번호 선택: 
-              {[...Array(pickers)].map((_, i) => (
-                <button
-                  key={i}
-                  className={`ml-2 underline ${pickerNo === i + 1 ? "font-bold" : ""}`}
-                  onClick={() => setPickerNo(i + 1)}
-                >#{i + 1}</button>
-              ))}
-              <span className="ml-2 text-gray-500">(또는 URL에 ?picker={"<번호>"})</span>
-            </div>
-
-            <div className="mt-6 grid grid-cols-2 gap-2">
-              <button className="btn-primary" onClick={startPicking} disabled={!rawRows.length}>피킹 시작하기</button>
-              <button className="btn-ghost" onClick={clearData}>Clear Data</button>
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  // 진행 화면
-  const total = myList.length;
-  const progressPct = total ? Math.round((doneCount / total) * 100) : 0;
-
-  return (
-    <div className="min-h-screen bg-white text-gray-900">
-      <Header title={`피커 #${pickerNo} · ${doneCount}/${total} (${progressPct}%)`} />
-      <main className="mx-auto max-w-xl px-4 py-6">
-        <div className="rounded-2xl border shadow-sm p-5">
-          {/* 다음 로케이션 미리보기 */}
-          <div className="text-sm font-medium text-emerald-600 mb-2">
-            다음 제품 로케이션: {nextItem?.location || "-"}
-          </div>
-
-          {/* 현재 로케이션 크게 */}
-          <div className="text-3xl font-extrabold tracking-tight mb-1 break-words">
-            {current?.location || "-"}
-          </div>
-
-          {/* 사이즈/수량 */}
-          <div className="text-base mb-3">
-            <span className="font-medium">사이즈</span>: {current?.size || "-"}
-            <span className="inline-block w-3" />
-            <span className="font-medium">수량</span>: <span className="text-red-600 font-bold">{current?.qty || "1"}</span>
-          </div>
-
-          {/* 노란 박스: 바코드5/컬러명 (컬러 강조) */}
-          <div className="rounded-xl border bg-yellow-100 px-3 py-2 mb-3">
-            <div className="text-sm">바코드 5자리: <span className="font-mono font-bold tracking-wide">{current?.barcode5 || ""}</span></div>
-            <div className="text-base font-bold">컬러: {current?.color || "-"}</div>
-          </div>
-
-          {/* 스타일명 */}
-          <div className="text-sm text-gray-700 mb-3">
-            <span className="font-medium">스타일명</span>: {current?.styleName || "-"}
-            {current?.styleCode ? <span className="text-gray-500">  (코드 {current.styleCode})</span> : null}
-          </div>
-
-          {/* 버튼들 */}
-          <div className="grid grid-cols-1 gap-2 mb-2">
-            <button className="btn-primary h-14 text-lg" onClick={markOk}>OK!</button>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mb-2">
-            <button className="btn-secondary" onClick={goPrev}>Previous</button>
-            <button className="btn-secondary" onClick={goNext}>Next</button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button className="btn-ghost" onClick={jumpFirstInCategory}>First in Category</button>
-            <button className="btn-ghost" onClick={jumpLastInCategory}>Last in Category</button>
-          </div>
-        </div>
-
-        <div className="mt-4 text-center">
-          <button className="text-sm text-gray-600 underline" onClick={clearData}>초기화 및 나가기</button>
-        </div>
-      </main>
-
-      {/* 간단 스타일 */}
-      <style>{`
-        * { -webkit-tap-highlight-color: transparent; }
-        .btn-primary { background:#111; color:#fff; border-radius:14px; padding:12px 16px; font-weight:700; border:1px solid #111; }
-        .btn-primary:active { transform: translateY(1px); }
-        .btn-secondary { background:#fff; color:#111; border-radius:14px; padding:12px 16px; font-weight:700; border:1px solid #d1d5db; }
-        .btn-secondary:active { transform: translateY(1px); }
-        .btn-ghost { background:#fff; color:#111; border-radius:14px; padding:12px 16px; font-weight:600; border:1px dashed #d1d5db; }
-        .btn-number { border-radius:12px; padding:10px 0; border:1px solid #d1d5db; font-weight:700; background:#fff; }
-        .btn-number.active { background:#111; color:#fff; border-color:#111; }
-        header.sticky { position:sticky; top:0; background:rgba(255,255,255,.92); backdrop-filter: saturate(180%) blur(6px); border-bottom:1px solid #e5e7eb; z-index:10; }
-      `}</style>
-    </div>
-  );
-}
-
-function Header({ title }) {
-  return (
-    <header className="sticky">
-      <div className="mx-auto max-w-xl px-4 py-3 flex items-center justify-between">
-        <div className="text-lg font-bold">📦 Picking</div>
-        <div className="text-sm text-gray-700">{title}</div>
-      </div>
-    </header>
-  );
-}
-
-// --------- 진행 상태 직렬화 유틸 ---------
-function serializeProgress(obj) {
-  const out = {};
-  for (const k of Object.keys(obj)) {
-    out[k] = { idx: obj[k].idx || 0, doneIds: Array.from(obj[k].doneIds || []) };
-  }
-  return out;
-}
-function reviveProgress(obj) {
-  const out = {};
-  for (const k of Object.keys(obj)) {
-    out[k] = { idx: obj[k].idx || 0, doneIds: new Set(obj[k].doneIds || []) };
-  }
-  return out;
-}
-function cloneProgress(obj) {
-  const out = {};
-  for (const k of Object.keys(obj)) {
-    out[k] = { idx: obj[k].idx, doneIds: new Set(obj[k].doneIds) };
-  }
-  return out;
-}
