@@ -170,7 +170,7 @@ def render_setup():
                 if st.session_state.picker_no > n:
                     st.session_state.picker_no = n
 
-    st.write('피커 번호 선택: ', end='')
+   st.markdown('**피커 번호 선택:**', unsafe_allow_html=True)
     pick_buttons = st.columns(st.session_state.pickers)
     for i in range(st.session_state.pickers):
         with pick_buttons[i]:
