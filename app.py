@@ -60,29 +60,47 @@ def sort_key(row):
     return f"{base:03d}-{loc}"
 
 def parse_dataframe(df):
+    """업로드된 DF를 표준 컬럼으로 정리 (바코드 찾기 로직 복원)"""
     out = []
     cols = list(df.columns)
+    # 모든 가능한 헤더 이름을 찾습니다.
     k_location = key_of(cols, {'location','로케이션','bin','shelf','loc','위치'})
     k_qty = key_of(cols, {'qty','수량','quantity', '주문수량'})
     k_size = key_of(cols, {'size','사이즈'})
     k_color = key_of(cols, {'색상명','colorname','color','색상'})
     k_style = key_of(cols, {'스타일명','stylename','product','제품명','name'})
-    
+    k_barcode = key_of(cols, {'barcode','바코드','upc','ean'}) # <-- 바코드 헤더 찾기 로직 복원!
+
     for i, r in df.iterrows():
         location = str(r.get(k_location, '')).strip()
         if not location: continue
+
+        # 1단계: '색상명'에서 바코드와 컬러를 먼저 분리
+        bc_from_color = split_barcode_color(r.get(k_color, ''))
+        color = bc_from_color['color']
+        barcode5 = bc_from_color['barcode5']
+
+        # 2단계: '바코드' 전용 칸이 있는지 확인하고, 값이 있다면 그것으로 덮어쓰기
+        if k_barcode: # '바코드' 칸이 존재한다면
+            raw_barcode = str(r.get(k_barcode, '')).strip()
+            if raw_barcode:
+                # 바코드 칸에서 숫자 5자리를 찾습니다.
+                import re
+                m = re.search(r'(\d{5})', raw_barcode)
+                if m:
+                    barcode5 = m.group(1) # 찾았다면, 이 값으로 최종 확정!
 
         out.append({
             'id': int(i),
             'location': location,
             'qty': str(r.get(k_qty, '1')).strip() or '1',
             'size': str(r.get(k_size, '')).strip(),
-            **split_barcode_color(r.get(k_color, '')),
+            'color': color,
+            'barcode5': barcode5, # 최종적으로 확정된 바코드를 저장
             **split_style(r.get(k_style, '')),
             'zone': get_zone(location),
         })
     return out
-
 def distribute(sorted_rows, n_pickers):
     import math
     n = max(1, min(6, int(n_pickers or 1)))
