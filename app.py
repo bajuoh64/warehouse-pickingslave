@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import re
 import io
@@ -6,15 +7,7 @@ import pandas as pd
 import streamlit as st
 
 # -------------------------------------------------------------
-# 피킹 최적화 웹 애플리케이션 (Streamlit · Python) — 최종본 v1.2
-# -------------------------------------------------------------
-# 기능 요약
-# - 엑셀(xlsx)·CSV 업로드 → JSON 변환
-# - '색상명'에서 바코드5 / 컬러명 분리, '스타일명'에서 품번 / 스타일명 분리
-# - 마스터 동선표에 따른 정렬, N명 균등 분배(동선 끊김 최소화)
-# - 피커별 화면: 다음 로케이션 / 현재 로케이션 / 사이즈 / 수량 / 바코드5 / 컬러 / 스타일명
-# - 제어 버튼: OK! / Previous / Next / First in Category / Last in Category
-# - 진행상태는 세션에 저장. Clear Data로 초기화
+# 피킹 최적화 웹 애플리케이션 (Streamlit · Python) — 최종본 v1.2 (indent fix)
 # -------------------------------------------------------------
 
 st.set_page_config(page_title="피킹 최적화 웹앱 v1.2", layout="centered")
@@ -138,8 +131,7 @@ if 'picker_no' not in st.session_state:
 if 'packs' not in st.session_state:
     st.session_state.packs = []
 if 'progress' not in st.session_state:
-    # {1: {'idx':0,'done_ids':set()}, ...}
-    st.session_state.progress = {}
+    st.session_state.progress = {}  # {1: {'idx':0,'done_ids':set()}, ...}
 
 # --------------- 메인/설정 화면 ---------------
 def render_setup():
@@ -162,37 +154,52 @@ def render_setup():
     st.write('---')
     st.subheader('작업자 수 선택')
     cols = st.columns(6)
-    for i, n in enumerate([1,2,3,4,5,6]):
+    for i, n in enumerate([1, 2, 3, 4, 5, 6]):
         with cols[i]:
-            clicked = st.button(f"{n}", use_container_width=True, type=('primary' if st.session_state.pickers==n else 'secondary'))
+            clicked = st.button(
+                f"{n}",
+                use_container_width=True,
+                type=('primary' if st.session_state.pickers == n else 'secondary')
+            )
             if clicked:
                 st.session_state.pickers = n
                 if st.session_state.picker_no > n:
                     st.session_state.picker_no = n
 
-   st.markdown('**피커 번호 선택:**', unsafe_allow_html=True)
+#     ---- 피커 번호 선택 라인 (indent 안정화) ----
+    st.markdown('**피커 번호 선택:**')
     pick_buttons = st.columns(st.session_state.pickers)
     for i in range(st.session_state.pickers):
         with pick_buttons[i]:
-            b = st.button(f"#{i+1}", use_container_width=True, type=('primary' if st.session_state.picker_no==i+1 else 'secondary'))
+            b = st.button(
+                f"#{i+1}",
+                use_container_width=True,
+                type=('primary' if st.session_state.picker_no == i + 1 else 'secondary')
+            )
             if b:
-                st.session_state.picker_no = i+1
+                st.session_state.picker_no = i + 1
 
     st.write('---')
     c1, c2 = st.columns(2)
     with c1:
-        start = st.button('피킹 시작하기', type='primary', use_container_width=True, disabled=(len(st.session_state.raw_rows)==0))
+        start = st.button(
+            '피킹 시작하기',
+            type='primary',
+            use_container_width=True,
+            disabled=(len(st.session_state.raw_rows) == 0)
+        )
     with c2:
         clear = st.button('Clear Data', use_container_width=True)
 
     if start:
-        # 정렬 및 분배
         sorted_rows = sorted(st.session_state.raw_rows, key=sort_key)
         st.session_state.sorted_rows = sorted_rows
         packs = distribute(sorted_rows, st.session_state.pickers)
         st.session_state.packs = packs
-        # 진행상태 초기화
-        st.session_state.progress = {p:{'idx':0,'done_ids':set()} for p in range(1, st.session_state.pickers+1)}
+        st.session_state.progress = {
+            p: {'idx': 0, 'done_ids': set()}
+            for p in range(1, st.session_state.pickers + 1)
+        }
         st.session_state.started = True
 
     if clear:
@@ -213,33 +220,38 @@ def render_setup():
 def render_running():
     pno = st.session_state.picker_no
     packs = st.session_state.packs
-    my_list = packs[pno-1] if packs and len(packs) >= pno else []
-    prog = st.session_state.progress.get(pno, {'idx':0,'done_ids':set()})
-    idx = min(max(0, prog['idx']), max(0, len(my_list)-1)) if my_list else 0
+    my_list = packs[pno - 1] if packs and len(packs) >= pno else []
+    prog = st.session_state.progress.get(pno, {'idx': 0, 'done_ids': set()})
+    idx = min(max(0, prog['idx']), max(0, len(my_list) - 1)) if my_list else 0
     current = my_list[idx] if my_list else None
-    next_item = my_list[idx+1] if my_list and idx+1 < len(my_list) else None
+    next_item = my_list[idx + 1] if my_list and idx + 1 < len(my_list) else None
 
     done_count = sum(1 for r in my_list if r['id'] in prog['done_ids'])
     total = len(my_list)
-    pct = int(round((done_count/total)*100)) if total else 0
+    pct = int(round((done_count / total) * 100)) if total else 0
 
     st.title(f"피커 #{pno} · {done_count}/{total} ({pct}%)")
-    st.progress(pct/100 if total else 0.0)
+    st.progress(pct / 100 if total else 0.0)
 
     box = st.container()
     with box:
-        st.markdown(f"**다음 제품 로케이션**: :green[{next_item.get('location','-') if next_item else '-'}]")
-        st.markdown(f"### {current.get('location','-') if current else '-'}")  # 현재 로케이션 크게
+        st.markdown(f"**다음 제품 로케이션**: :green[{next_item.get('location', '-') if next_item else '-'}]")
+        st.markdown(f"### {current.get('location', '-') if current else '-'}")
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown(f"**사이즈**: {current.get('size','-') if current else '-'}")
+            st.markdown(f"**사이즈**: {current.get('size', '-') if current else '-'}")
         with c2:
-            st.markdown(f"**수량**: :red[{current.get('qty','1') if current else '1'}]")
+            st.markdown(f"**수량**: :red[{current.get('qty', '1') if current else '1'}]")
 
-        st.markdown("> 바코드 5자리 / 컬러") 
-        st.info(f"바코드: `{current.get('barcode5','') if current else ''}`\n컬러: **{current.get('color','-') if current else '-'}**")  # 노란 박스 느낌은 info로 대체
+        st.markdown("> 바코드 5자리 / 컬러")
+        st.info(
+            f"바코드: `{current.get('barcode5', '') if current else ''}`\n컬러: **{current.get('color', '-') if current else '-'}**"
+        )
 
-        st.caption(f"스타일명: {current.get('styleName','-') if current else '-'}" + (f"  (코드 {current.get('styleCode','')})" if current and current.get('styleCode') else ''))
+        st.caption(
+            f"스타일명: {current.get('styleName', '-') if current else '-'}" +
+            (f"  (코드 {current.get('styleCode', '')})" if current and current.get('styleCode') else '')
+        )
 
     st.write('')
     ok = st.button('OK! ✅', type='primary', use_container_width=True)
@@ -255,20 +267,20 @@ def render_running():
         last_cat = st.button('Last in Category', use_container_width=True)
 
     def jump_to(i):
-        i = max(0, min(i, max(0, len(my_list)-1)))
+        i = max(0, min(i, max(0, len(my_list) - 1)))
         st.session_state.progress[pno]['idx'] = i
 
     if ok and current:
         st.session_state.progress[pno]['done_ids'].add(current['id'])
-        jump_to(idx+1)
+        jump_to(idx + 1)
         st.experimental_rerun()
 
     if prev:
-        jump_to(idx-1)
+        jump_to(idx - 1)
         st.experimental_rerun()
 
     if nxt:
-        jump_to(idx+1)
+        jump_to(idx + 1)
         st.experimental_rerun()
 
     if first_cat and current:
@@ -281,7 +293,7 @@ def render_running():
 
     if last_cat and current:
         cat = current['zone']
-        for i in range(len(my_list)-1, -1, -1):
+        for i in range(len(my_list) - 1, -1, -1):
             if my_list[i]['zone'] == cat:
                 jump_to(i)
                 st.experimental_rerun()
