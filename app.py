@@ -202,8 +202,6 @@ def render_running():
     st.progress(pct / 100, text=f"{done_count} / {total} ({pct}%)")
 
     if st.session_state.pickers > 1:
-        # 다른 작업자 화면 보기 UI (이전과 동일)
-        # ... (이 부분은 수정할 필요 없습니다)
         st.subheader("다른 작업자 화면 보기")
         cols = st.columns(st.session_state.pickers)
         for i in range(st.session_state.pickers):
@@ -213,8 +211,6 @@ def render_running():
         st.divider()
 
     if current:
-        # 피킹 정보 표시 UI (이전과 동일)
-        # ... (이 부분은 수정할 필요 없습니다)
         st.markdown(f"**다음 로케이션**: :green[{next_item['location'] if next_item else '없음'}]")
         st.header(current['location'])
         
@@ -233,27 +229,33 @@ def render_running():
 
     st.divider()
 
-    # --- 버튼 로직 (핵심 수정 부분) ---
+    # --- 버튼 로직 (핵심 수정 부분: '실행 취소' 기능 추가) ---
     def jump_to(new_index):
         st.session_state.progress[pno]['idx'] = max(0, min(new_index, len(my_list) - 1))
 
     # 현재 항목이 완료되었는지 확인
     is_done = current and current['id'] in prog.get('done_ids', set())
 
-    # 조건에 따라 다른 OK 버튼 표시
+    # 조건에 따라 OK 버튼의 모양과 텍스트를 결정
     if is_done:
-        # 이미 완료된 항목일 경우
-        st.button('완료됨 ✅', type='secondary', use_container_width=True, disabled=True)
-        ok_clicked = False
+        button_label = '완료 취소 ↩️'
+        button_type = 'secondary' # 회색 버튼
     else:
-        # 아직 완료되지 않은 항목일 경우
-        ok_clicked = st.button('OK! ✅', type='primary', use_container_width=True, disabled=not current)
+        button_label = 'OK! ✅'
+        button_type = 'primary'   # 빨간색 버튼
 
-    # OK 버튼이 '클릭'되었을 때만 로직 실행
-    if ok_clicked and current:
-        prog['done_ids'].add(current['id'])
-        jump_to(idx + 1)
-        st.rerun()
+    # 하나의 버튼으로 두 가지 기능(완료, 취소)을 모두 처리
+    if st.button(button_label, type=button_type, use_container_width=True, disabled=not current):
+        if is_done:
+            # [실행 취소 로직] 완료된 상태에서 버튼을 눌렀을 때
+            prog['done_ids'].remove(current['id'])
+            # 현재 화면에 머무르기 위해 인덱스는 변경하지 않음
+        else:
+            # [완료 로직] 미완료 상태에서 버튼을 눌렀을 때
+            prog['done_ids'].add(current['id'])
+            jump_to(idx + 1) # 다음 항목으로 이동
+        
+        st.rerun() # 변경사항을 즉시 화면에 반영
 
     c1, c2 = st.columns(2)
     if c1.button('◀ Previous', use_container_width=True):
